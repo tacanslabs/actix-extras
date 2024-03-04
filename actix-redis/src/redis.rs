@@ -16,7 +16,7 @@ use actix_service::{
     boxed::{service, BoxService},
     fn_service, Service,
 };
-use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
+use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService, Host};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use bytes::BytesMut;
 use derive_more::{Deref, DerefMut};
@@ -40,15 +40,35 @@ impl Message for Command {
     type Result = Result<RespValue, Error>;
 }
 
+
+
+#[derive(Clone, Debug, Deref)]
+pub struct RedisUrl {
+    #[deref(forward)]
+    pub addr: String,
+    pub password: Option<String>,
+    pub index: Option<String>,
+}
+
+impl Host for RedisUrl {
+    fn hostname(&self) -> &str {
+        self.split_once(':')
+            .map(|(hostname, _)| hostname)
+            .unwrap_or(self)
+    }
+
+    fn port(&self) -> Option<u16> {
+        self.split_once(':').and_then(|(_, port)| port.parse().ok())
+    }
+}
+
 /// Redis communication actor.
 pub struct RedisActor {
-    addr: String,
-    password: Option<String>,
-    index: Option<String>,
-    connector: BoxService<ConnectInfo<String>, Connection<String, TcpStream>, ConnectError>,
+    url: RedisUrl,
+    connector: BoxService<ConnectInfo<RedisUrl>, Connection<RedisUrl, TcpStream>, ConnectError>,
     resolver: BoxService<
-        Connection<String, TcpStream>,
-        Connection<String, RcStream<dyn ActixStream>>,
+        Connection<RedisUrl, TcpStream>,
+        Connection<RedisUrl, RcStream<dyn ActixStream>>,
         io::Error,
     >,
     backoff: ExponentialBackoff,
@@ -61,13 +81,10 @@ impl RedisActor {
     pub fn start<S: Into<String>>(addr: S) -> Addr<RedisActor> {
         let addr = addr.into();
 
-        let (addr, password, index) = Self::parse_url(addr);
+        let url = Self::parse_url(addr);
+        debug!("Redis Url {url:#?}");
 
-        debug!("Addr {addr:#?}");
-        debug!("Password {password:#?}");
-        debug!("Index {index:#?}");
-
-        let resolver = service(fn_service(|req: Connection<String, TcpStream>| async {
+        let resolver = service(fn_service(|req: Connection<RedisUrl, TcpStream>| async {
             debug!("Resolver requested");
             let (stream, addr) = req.into_parts();
             let stream = Rc::new(RefCell::new(stream)) as _;
@@ -81,9 +98,7 @@ impl RedisActor {
         };
 
         Supervisor::start(move |_| RedisActor {
-            addr,
-            password,
-            index,
+            url,
             connector: service(ConnectorService::default()),
             resolver,
             cell: None,
@@ -92,7 +107,7 @@ impl RedisActor {
         })
     }
 
-    pub fn parse_url(addr: String) -> (String, Option<String>, Option<String>) {
+    pub fn parse_url(addr: String) -> RedisUrl {
         let parser = url_parse::core::Parser::new(None);
 
         let url = parser
@@ -108,7 +123,11 @@ impl RedisActor {
             .and_then(|index| if index.is_empty() { None } else { Some(index) })
             .cloned();
 
-        (addr, password, index)
+        RedisUrl {
+            addr,
+            password,
+            index,
+        }
     }
 }
 
@@ -116,7 +135,7 @@ impl Actor for RedisActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
-        let req = ConnectInfo::new(self.addr.to_owned());
+        let req = ConnectInfo::new(self.url.clone());
         debug!("Started RedisActor with request: {req:#?}");
         self.connector
             .call(req)
@@ -128,15 +147,13 @@ impl Actor for RedisActor {
             .then(|res, act, _| async { res?.await.map_err(ConnectError::Io) }.into_actor(act))
             .map(|res, act, _| {
                 res.map(|conn| {
-                    info!("Connected to redis server: {}", act.addr);
+                    info!("Connected to redis server: {:#?}", act.url);
                     let stream = conn.into_parts().0;
                     stream
                 })
             })
             .then(|res, act, _| {
-                let addr = act.addr.clone();
-                let password = act.password.clone();
-                let index = act.index.clone();
+                let url = act.url.clone();
 
                 async move {
                     let stream = res?;
@@ -146,8 +163,8 @@ impl Actor for RedisActor {
                     let mut reader = Framed::new(stream, RespCodec);
 
                     // do authentication if needed.
-                    if let Some(password) = password {
-                        info!("Authenticating to redis server: {}", addr);
+                    if let Some(password) = url.password {
+                        info!("Authenticating to redis server");
 
                         let auth_command = resp_array!["AUTH", password];
                         let mut buf = BytesMut::new();
@@ -161,11 +178,11 @@ impl Actor for RedisActor {
                         let res = StreamReader {
                             reader: &mut reader,
                         }
-                        .await
-                        .map_err(|_| ConnectError::Unresolved)?;
+                            .await
+                            .map_err(|_| ConnectError::Unresolved)?;
 
                         if let RespValue::Error(err) = res {
-                            error!("Authentication failed with redis server: {}", addr);
+                            error!("Authentication failed with redis server");
                             return Err(ConnectError::Io(io::Error::new(
                                 io::ErrorKind::Other,
                                 err,
@@ -174,8 +191,8 @@ impl Actor for RedisActor {
                     };
 
                     // select index if needed.
-                    if let Some(index) = index {
-                        info!("Index selection to redis server: {}", addr);
+                    if let Some(index) = url.index {
+                        info!("Index selection to redis server");
 
                         let select_command = resp_array!["SELECT", index];
                         let mut buf = BytesMut::new();
@@ -189,11 +206,11 @@ impl Actor for RedisActor {
                         let res = StreamReader {
                             reader: &mut reader,
                         }
-                        .await
-                        .map_err(|_| ConnectError::Unresolved)?;
+                            .await
+                            .map_err(|_| ConnectError::Unresolved)?;
 
                         if let RespValue::Error(err) = res {
-                            error!("Index selection failed with redis server: {}", addr);
+                            error!("Index selection failed with redis server");
                             return Err(ConnectError::Io(io::Error::new(
                                 io::ErrorKind::Other,
                                 err,
@@ -203,7 +220,7 @@ impl Actor for RedisActor {
 
                     Ok((reader, writer))
                 }
-                .into_actor(act)
+                    .into_actor(act)
             })
             .map(|res, act, ctx| match res {
                 Ok((reader, writer)) => {
@@ -236,7 +253,7 @@ impl Supervised for RedisActor {
 
 impl actix::io::WriteHandler<io::Error> for RedisActor {
     fn error(&mut self, err: io::Error, _: &mut Self::Context) -> Running {
-        warn!("Redis connection dropped: {} error: {}", self.addr, err);
+        warn!("Redis connection dropped: {:#?} error: {}", self.url, err);
         Running::Stop
     }
 }

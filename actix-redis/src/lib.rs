@@ -11,7 +11,7 @@ use derive_more::{Display, Error, From};
 pub use redis_async::{error::Error as RespError, resp::RespValue, resp_array};
 
 mod redis;
-pub use self::redis::{Command, RedisActor};
+pub use self::redis::{Command, RedisActor, RedisUrl};
 
 /// General purpose `actix-redis` error.
 #[derive(Debug, Display, Error, From)]
