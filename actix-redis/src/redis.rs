@@ -12,13 +12,16 @@ use std::{
 use actix::prelude::*;
 use actix_codec::{AsyncRead, AsyncWrite, Encoder, Framed, ReadBuf};
 use actix_rt::net::{ActixStream, TcpStream};
-use actix_service::boxed::{self, BoxService};
+use actix_service::{
+    boxed::{service, BoxService},
+    fn_service, Service,
+};
 use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use bytes::BytesMut;
 use derive_more::{Deref, DerefMut};
 use futures_core::ready;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use redis_async::{
     error::Error as RespError,
     resp::{RespCodec, RespValue},
@@ -43,6 +46,11 @@ pub struct RedisActor {
     password: Option<String>,
     index: Option<String>,
     connector: BoxService<ConnectInfo<String>, Connection<String, TcpStream>, ConnectError>,
+    resolver: BoxService<
+        Connection<String, TcpStream>,
+        Connection<String, RcStream<dyn ActixStream>>,
+        io::Error,
+    >,
     backoff: ExponentialBackoff,
     cell: Option<actix::io::FramedWrite<RespValue, RcStream<dyn ActixStream>, RespCodec>>,
     queue: VecDeque<oneshot::Sender<Result<RespValue, Error>>>,
@@ -55,16 +63,29 @@ impl RedisActor {
 
         let (addr, password, index) = Self::parse_url(addr);
 
+        debug!("Addr {addr:#?}");
+        debug!("Password {password:#?}");
+        debug!("Index {index:#?}");
+
+        let resolver = service(fn_service(|req: Connection<String, TcpStream>| async {
+            debug!("Resolver requested");
+            let (stream, addr) = req.into_parts();
+            let stream = Rc::new(RefCell::new(stream)) as _;
+            let stream = RcStream(stream);
+            Ok(Connection::new(addr, stream))
+        }));
+
         let backoff = ExponentialBackoff {
             max_elapsed_time: None,
             ..Default::default()
         };
 
-        Supervisor::start(|_| RedisActor {
+        Supervisor::start(move |_| RedisActor {
             addr,
             password,
             index,
-            connector: boxed::service(ConnectorService::default()),
+            connector: service(ConnectorService::default()),
+            resolver,
             cell: None,
             backoff,
             queue: VecDeque::new(),
@@ -96,15 +117,20 @@ impl Actor for RedisActor {
 
     fn started(&mut self, ctx: &mut Context<Self>) {
         let req = ConnectInfo::new(self.addr.to_owned());
+        debug!("Started RedisActor with request: {req:#?}");
         self.connector
             .call(req)
             .into_actor(self)
             .map(|res, act, _| {
+                debug!("Got response from connector");
+                res.map(|conn| act.resolver.call(conn))
+            })
+            .then(|res, act, _| async { res?.await.map_err(ConnectError::Io) }.into_actor(act))
+            .map(|res, act, _| {
                 res.map(|conn| {
                     info!("Connected to redis server: {}", act.addr);
                     let stream = conn.into_parts().0;
-                    let stream = Rc::new(RefCell::new(stream)) as _;
-                    RcStream(stream)
+                    stream
                 })
             })
             .then(|res, act, _| {
@@ -122,15 +148,15 @@ impl Actor for RedisActor {
                     // do authentication if needed.
                     if let Some(password) = password {
                         info!("Authenticating to redis server: {}", addr);
-                        let auth_command = resp_array!["AUTH", password];
 
+                        let auth_command = resp_array!["AUTH", password];
                         let mut buf = BytesMut::new();
 
                         RespCodec
                             .encode(auth_command, &mut buf)
                             .map_err(ConnectError::Io)?;
 
-                        writer.write(&buf).await.map_err(ConnectError::Io)?;
+                        writer.write(&mut buf).await.map_err(ConnectError::Io)?;
 
                         let res = StreamReader {
                             reader: &mut reader,
@@ -149,16 +175,16 @@ impl Actor for RedisActor {
 
                     // select index if needed.
                     if let Some(index) = index {
-                        info!("Index selection for redis server: {}", addr);
-                        let select_command = resp_array!["SELECT", index];
+                        info!("Index selection to redis server: {}", addr);
 
+                        let select_command = resp_array!["SELECT", index];
                         let mut buf = BytesMut::new();
 
                         RespCodec
                             .encode(select_command, &mut buf)
                             .map_err(ConnectError::Io)?;
 
-                        writer.write(&buf).await.map_err(ConnectError::Io)?;
+                        writer.write(&mut buf).await.map_err(ConnectError::Io)?;
 
                         let res = StreamReader {
                             reader: &mut reader,
