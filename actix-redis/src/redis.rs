@@ -31,7 +31,7 @@ use regex::Regex;
 use crate::Error;
 
 const REDIS_URL_REGEX: &str =
-    r#"(:?(?P<password>.*)@)?(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})(/(?P<index>.*))?"#;
+    r#"(redis://)?(:?(?P<password>.*)@)?(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})(/(?P<index>.*))?"#;
 lazy_static! {
     static ref RE: Regex = Regex::new(REDIS_URL_REGEX).unwrap();
 }
