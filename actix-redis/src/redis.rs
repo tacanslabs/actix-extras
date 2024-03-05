@@ -1,8 +1,10 @@
 use std::{collections::VecDeque, io};
+use actix::fut::err;
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
 use actix_service::boxed::{self, BoxService};
+use actix_service::{Service, ServiceFactoryExt};
 use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use log::{error, info, warn};
@@ -11,7 +13,9 @@ use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
 };
-use tokio_util::codec::FramedRead;
+use tokio::io::AsyncWriteExt;
+use tokio_util::codec::{Encoder, FramedRead};
+use bytes::BytesMut;
 
 use crate::Error;
 
@@ -64,23 +68,56 @@ impl Actor for RedisActor {
         self.connector
             .call(req)
             .into_actor(self)
-            .map(|res, act, ctx| match res {
-                Ok(conn) => {
-                    let stream = conn.into_parts().0;
+            .map(|res, act, ctx| {
+                res.map(|connection| {
+                    let (stream, _addr)= connection.into_parts();
+
                     info!("Connected to redis server: {}", act.addr);
 
-                    let (r, w) = split(stream);
+                    (stream, act.password.clone(), act.index.clone())
+                })
+            })
+            .then(|res, act, ctx| {
+                async move {
+                    match res {
+                        Ok((stream, password, index)) => {
 
-                    // configure write side of the connection
-                    let framed = actix::io::FramedWrite::new(w, RespCodec, ctx);
-                    act.cell = Some(framed);
+                            let (reader, mut writer) = split(stream);
 
-                    // read side of the connection
-                    ctx.add_stream(FramedRead::new(r, RespCodec));
+                            if let Some(password) = password {
+                                let command = resp_array!["AUTH", password];
+                                let mut buf = BytesMut::new();
 
+                                RespCodec
+                                    .encode(command, &mut buf)
+                                    .map_err(ConnectError::Io)?;
+
+                                writer.write(&mut buf).await.map_err(ConnectError::Io)?;
+                            }
+
+                            if let Some(index) = index {
+                                let command = resp_array!["SELECT", index];
+                                let mut buf = BytesMut::new();
+
+                                RespCodec
+                                    .encode(command, &mut buf)
+                                    .map_err(ConnectError::Io)?;
+
+                                writer.write(&mut buf).await.map_err(ConnectError::Io)?;
+                            }
+
+                            Ok((reader, writer))
+                        }
+                        Err(e) => Err(e)
+                    }
+                }.into_actor(act)
+            })
+           .map(|res, act, ctx| match res {
+                Ok((reader, writer)) => {
+                    let writer = actix::io::FramedWrite::new(writer, RespCodec, ctx);
+                    act.cell = Some(writer);
+                    ctx.add_stream(FramedRead::new(reader, RespCodec));
                     act.backoff.reset();
-
-                    (act.password.clone(), act.index.clone())
                 }
                 Err(err) => {
                     error!("Can not connect to redis server: {}", err);
@@ -89,16 +126,6 @@ impl Actor for RedisActor {
                     if let Some(timeout) = act.backoff.next_backoff() {
                         ctx.run_later(timeout, |_, ctx| ctx.stop());
                     }
-                    (None, None)
-                }
-            })
-            .then(|(password, index), act, ctx| {
-                if let Some(password) = password {
-                    ctx.notify(Command(resp_array!["AUTH", password]));
-                }
-
-                if let Some(index) = index {
-                    ctx.notify(Command(resp_array!["SELECT", index]));
                 }
             })
             .wait(ctx);
