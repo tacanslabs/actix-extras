@@ -1,29 +1,25 @@
-use actix::fut::err;
-use std::cell::RefCell;
 use std::future::Future;
-use std::ops::Deref;
 use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Poll};
+use std::task::Poll;
 use std::{collections::VecDeque, io, task};
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
 use actix_service::boxed::{self, BoxService};
-use actix_service::{Service, ServiceFactoryExt};
+use actix_service::{Service};
 use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use bytes::BytesMut;
-use derive_more::{Deref, DerefMut, From};
+use derive_more::From;
 use futures_core::ready;
 use log::{error, info, warn};
+use redis_async::resp::FromResp;
 use redis_async::{
     error::Error as RespError,
     resp::{RespCodec, RespValue},
     resp_array,
 };
-use redis_async::resp::FromResp;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf, ReadHalf};
+use tokio::io::AsyncWriteExt;
 use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
@@ -85,7 +81,7 @@ impl Actor for RedisActor {
         self.connector
             .call(req)
             .into_actor(self)
-            .map(|res, act, ctx| {
+            .map(|res, act, _ctx| {
                 res.map(|connection| {
                     let (stream, _addr) = connection.into_parts();
 
@@ -94,12 +90,12 @@ impl Actor for RedisActor {
                     stream
                 })
             })
-            .then(|res, act, ctx| {
+            .then(|res, act, _ctx| {
                 let password = act.password.clone();
                 let index = act.index.clone();
                 async move {
                     match res {
-                        Ok((mut stream)) => {
+                        Ok(mut stream) => {
                             if let Some(password) = password {
                                 let command = resp_array!["AUTH", password];
                                 let mut buf = BytesMut::new();
@@ -108,10 +104,11 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
-                                let auth_response = StreamReader::from(&mut framed_stream).await
+                                let auth_response = StreamReader::from(&mut framed_stream)
+                                    .await
                                     .map(String::from_resp)
                                     .map_err(io::Error::other)
                                     .map_err(ConnectError::Io)?;
@@ -129,10 +126,11 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
-                                let select_response = StreamReader::from(&mut framed_stream).await
+                                let select_response = StreamReader::from(&mut framed_stream)
+                                    .await
                                     .map(String::from_resp)
                                     .map_err(io::Error::other)
                                     .map_err(ConnectError::Io)?;
