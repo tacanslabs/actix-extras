@@ -26,13 +26,14 @@ use tokio::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio_util::codec::{Encoder, Framed, FramedRead};
+use regex::Regex;
 
 use crate::Error;
 
+const REDIS_URL_REGEX: &str =
+    r#"(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})"#;
 lazy_static! {
-    static ref REDIS_URL_RE: regex::Regex = regex::Regex::new(
-        r###"(redis://)?(:(?<password>.*?)@)?(?<addr>.*?)/(?<index>.*)"###
-    ).unwrap();
+    static ref RE: Regex = Regex::new(REDIS_URL_REGEX).unwrap();
 }
 
 /// Command for sending data to Redis.
@@ -78,16 +79,13 @@ impl RedisActor {
     }
 
     pub fn parse_url(addr: String) -> (String, Option<String>, Option<String>) {
-        let url = REDIS_URL_RE
+        let url = RE
             .captures(addr.as_ref())
             .expect("Cannot parse Url from {addr:?}");
 
         let addr = url.name("addr").expect("No HOST:PORT in redis url").as_str().to_string();
-        let password = url.name("password").map(|m| m.as_str().to_string());
-        let index = url
-            .name("index")
-            .map(|m| m.as_str().to_string());
-
+        let password = None;
+        let index = None;
         (addr, password, index)
     }
 }

@@ -41,6 +41,20 @@ async fn test_redis() {
     }
 }
 
+
+#[test]
+fn parse_naked_redis_address() {
+    let addr = "127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, None);
+    assert_eq!(index, None);
+
+
+
+}
 #[test]
 fn parse_redis_address_with_index() {
     let address = "redis://127.0.0.1:6378/5";
