@@ -1,7 +1,7 @@
-use std::{collections::VecDeque, io, task};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
+use std::{collections::VecDeque, io, task};
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
@@ -14,24 +14,23 @@ use derive_more::From;
 use futures_core::ready;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
+use redis_async::resp::FromResp;
 use redis_async::{
     error::Error as RespError,
     resp::{RespCodec, RespValue},
     resp_array,
 };
-use redis_async::resp::FromResp;
+use regex::Regex;
+use tokio::io::AsyncWriteExt;
 use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
 };
-use tokio::io::AsyncWriteExt;
 use tokio_util::codec::{Encoder, Framed, FramedRead};
-use regex::Regex;
 
 use crate::Error;
 
-const REDIS_URL_REGEX: &str =
-    r#"(redis://)?(:?(?P<password>.*)@)?(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})(/(?P<index>.*))?"#;
+const REDIS_URL_REGEX: &str = r#"(redis://)?(:?(?P<password>.*)@)?(?P<addr>(\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}|localhost):\d{1,5})(/(?P<index>.*))?"#;
 lazy_static! {
     static ref RE: Regex = Regex::new(REDIS_URL_REGEX).unwrap();
 }
@@ -83,9 +82,13 @@ impl RedisActor {
             .captures(addr.as_ref())
             .expect("Cannot parse Url from {addr:?}");
 
-        let addr = url.name("addr").expect("No HOST:PORT in redis url").as_str().to_string();
-        let password = url.name("password").map(|m|m.as_str().to_string());
-        let index = url.name("index").map(|m|m.as_str().to_string());
+        let addr = url
+            .name("addr")
+            .expect("No HOST:PORT in redis url")
+            .as_str()
+            .to_string();
+        let password = url.name("password").map(|m| m.as_str().to_string());
+        let index = url.name("index").map(|m| m.as_str().to_string());
         (addr, password, index)
     }
 }
@@ -121,7 +124,7 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
                                 let auth_response = StreamReader::from(&mut framed_stream)
@@ -143,7 +146,7 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
                                 let select_response = StreamReader::from(&mut framed_stream)
@@ -162,7 +165,7 @@ impl Actor for RedisActor {
                         Err(e) => Err(e),
                     }
                 }
-                    .into_actor(act)
+                .into_actor(act)
             })
             .map(|res, act, ctx| match res {
                 Ok((reader, writer)) => {
