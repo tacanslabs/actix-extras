@@ -1,8 +1,8 @@
 use std::future::Future;
+use std::io::ErrorKind::Other;
 use std::pin::Pin;
 use std::task::Poll;
 use std::{collections::VecDeque, io, task};
-use std::io::ErrorKind::Other;
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
@@ -81,13 +81,12 @@ impl RedisActor {
     pub fn parse_url(addr: String) -> (String, Option<String>, Option<String>) {
         let url = RE
             .captures(addr.as_ref())
-            .expect("Cannot parse Url from {addr:?}");
+            .expect("Cannot parse redis url from {addr:?}");
 
         let addr = url
             .name("addr")
-            .expect("No HOST:PORT in redis url")
-            .as_str()
-            .to_string();
+            .map(|m| m.as_str().to_string())
+            .expect("No HOST:PORT in redis url {addr:?}");
         let password = url.name("password").map(|m| m.as_str().to_string());
         let index = url.name("index").map(|m| m.as_str().to_string());
         (addr, password, index)
