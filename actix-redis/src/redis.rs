@@ -27,6 +27,7 @@ impl Message for Command {
 pub struct RedisActor {
     addr: String,
     password: Option<String>,
+    index: Option<String>,
     connector: BoxService<ConnectInfo<String>, Connection<String, TcpStream>, ConnectError>,
     backoff: ExponentialBackoff,
     cell: Option<actix::io::FramedWrite<RespValue, WriteHalf<TcpStream>, RespCodec>>,
@@ -35,7 +36,7 @@ pub struct RedisActor {
 
 impl RedisActor {
     /// Start new `Supervisor` with `RedisActor`.
-    pub fn start<S: Into<String>>(addr: S, password: Option<String>) -> Addr<RedisActor> {
+    pub fn start<S: Into<String>>(addr: S, password: Option<String>, index: Option<String>) -> Addr<RedisActor> {
         let addr = addr.into();
 
         let backoff = ExponentialBackoff {
@@ -46,6 +47,7 @@ impl RedisActor {
         Supervisor::start(|_| RedisActor {
             addr,
             password,
+            index,
             connector: boxed::service(ConnectorService::default()),
             cell: None,
             backoff,
@@ -78,6 +80,10 @@ impl Actor for RedisActor {
 
                     if let Some(password) = act.password.as_ref() {
                         ctx.notify(Command(resp_array!["AUTH", password]));
+                    }
+
+                    if let Some(index) = act.index.as_ref() {
+                        ctx.notify(Command(resp_array!["SELECT", index]));
                     }
 
                     act.backoff.reset();
