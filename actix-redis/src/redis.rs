@@ -6,10 +6,7 @@ use actix_service::boxed::{self, BoxService};
 use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use log::{error, info, warn};
-use redis_async::{
-    error::Error as RespError,
-    resp::{RespCodec, RespValue},
-};
+use redis_async::{error::Error as RespError, resp::{RespCodec, RespValue}, resp_array};
 use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
@@ -29,6 +26,7 @@ impl Message for Command {
 /// Redis communication actor.
 pub struct RedisActor {
     addr: String,
+    password: Option<String>,
     connector: BoxService<ConnectInfo<String>, Connection<String, TcpStream>, ConnectError>,
     backoff: ExponentialBackoff,
     cell: Option<actix::io::FramedWrite<RespValue, WriteHalf<TcpStream>, RespCodec>>,
@@ -37,7 +35,7 @@ pub struct RedisActor {
 
 impl RedisActor {
     /// Start new `Supervisor` with `RedisActor`.
-    pub fn start<S: Into<String>>(addr: S) -> Addr<RedisActor> {
+    pub fn start<S: Into<String>>(addr: S, password: Option<String>) -> Addr<RedisActor> {
         let addr = addr.into();
 
         let backoff = ExponentialBackoff {
@@ -47,6 +45,7 @@ impl RedisActor {
 
         Supervisor::start(|_| RedisActor {
             addr,
+            password,
             connector: boxed::service(ConnectorService::default()),
             cell: None,
             backoff,
@@ -76,6 +75,10 @@ impl Actor for RedisActor {
 
                     // read side of the connection
                     ctx.add_stream(FramedRead::new(r, RespCodec));
+
+                    if let Some(password) = act.password.as_ref() {
+                        ctx.notify(Command(resp_array!["AUTH", password]));
+                    }
 
                     act.backoff.reset();
                 }
