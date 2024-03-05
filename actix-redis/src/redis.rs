@@ -1,32 +1,39 @@
+use std::{collections::VecDeque, io, task};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
-use std::{collections::VecDeque, io, task};
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
 use actix_service::boxed::{self, BoxService};
-use actix_service::{Service};
+use actix_service::Service;
 use actix_tls::connect::{ConnectError, ConnectInfo, Connection, ConnectorService};
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use bytes::BytesMut;
 use derive_more::From;
 use futures_core::ready;
+use lazy_static::lazy_static;
 use log::{error, info, warn};
-use redis_async::resp::FromResp;
 use redis_async::{
     error::Error as RespError,
     resp::{RespCodec, RespValue},
     resp_array,
 };
-use tokio::io::AsyncWriteExt;
+use redis_async::resp::FromResp;
 use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
 };
+use tokio::io::AsyncWriteExt;
 use tokio_util::codec::{Encoder, Framed, FramedRead};
 
 use crate::Error;
+
+lazy_static! {
+    static ref REDIS_URL_RE: regex::Regex = regex::Regex::new(
+        r###"(redis://)?(:(?<password>.*?)@)?(?<addr>.*?)/(?<index>.*)"###
+    ).unwrap();
+}
 
 /// Command for sending data to Redis.
 #[derive(Debug)]
@@ -49,19 +56,17 @@ pub struct RedisActor {
 
 impl RedisActor {
     /// Start new `Supervisor` with `RedisActor`.
-    pub fn start<S: Into<String>>(
-        addr: S,
-        password: Option<String>,
-        index: Option<String>,
-    ) -> Addr<RedisActor> {
+    pub fn start<S: Into<String>>(addr: S) -> Addr<RedisActor> {
         let addr = addr.into();
+
+        let (addr, password, index) = Self::parse_url(addr);
 
         let backoff = ExponentialBackoff {
             max_elapsed_time: None,
             ..Default::default()
         };
 
-        Supervisor::start(|_| RedisActor {
+        Supervisor::start(move |_| RedisActor {
             addr,
             password,
             index,
@@ -70,6 +75,20 @@ impl RedisActor {
             backoff,
             queue: VecDeque::new(),
         })
+    }
+
+    pub fn parse_url(addr: String) -> (String, Option<String>, Option<String>) {
+        let url = REDIS_URL_RE
+            .captures(addr.as_ref())
+            .expect("Cannot parse Url from {addr:?}");
+
+        let addr = url.name("addr").expect("No HOST:PORT in redis url").as_str().to_string();
+        let password = url.name("password").map(|m| m.as_str().to_string());
+        let index = url
+            .name("index")
+            .map(|m| m.as_str().to_string());
+
+        (addr, password, index)
     }
 }
 
@@ -104,7 +123,7 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
                                 let auth_response = StreamReader::from(&mut framed_stream)
@@ -126,7 +145,7 @@ impl Actor for RedisActor {
                                     .encode(command, &mut buf)
                                     .map_err(ConnectError::Io)?;
 
-                                stream.write(&buf).await.map_err(ConnectError::Io)?;
+                                stream.write(&mut buf).await.map_err(ConnectError::Io)?;
 
                                 let mut framed_stream = Framed::new(stream, RespCodec);
                                 let select_response = StreamReader::from(&mut framed_stream)
