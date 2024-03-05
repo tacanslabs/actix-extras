@@ -92,13 +92,15 @@ impl Actor for RedisActor {
 
                     info!("Connected to redis server: {}", act.addr);
 
-                    (stream, act.password.clone(), act.index.clone())
+                    stream
                 })
             })
             .then(|res, act, ctx| {
+                let password = act.password.clone();
+                let index = act.index.clone();
                 async move {
                     match res {
-                        Ok((mut stream, password, index)) => {
+                        Ok((mut stream)) => {
                             if let Some(password) = password {
                                 let command = resp_array!["AUTH", password];
                                 let mut buf = BytesMut::new();
