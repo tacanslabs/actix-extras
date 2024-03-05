@@ -31,7 +31,7 @@ use regex::Regex;
 use crate::Error;
 
 const REDIS_URL_REGEX: &str =
-    r#"(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})"#;
+    r#"(?P<addr>\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{4})(/(?P<index>.*))?"#;
 lazy_static! {
     static ref RE: Regex = Regex::new(REDIS_URL_REGEX).unwrap();
 }
@@ -84,8 +84,8 @@ impl RedisActor {
             .expect("Cannot parse Url from {addr:?}");
 
         let addr = url.name("addr").expect("No HOST:PORT in redis url").as_str().to_string();
-        let password = None;
-        let index = None;
+        let password = url.name("password").map(|m|m.as_str().to_string());
+        let index = url.name("index").map(|m|m.as_str().to_string());
         (addr, password, index)
     }
 }
