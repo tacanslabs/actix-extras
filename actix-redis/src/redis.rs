@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
 use std::{collections::VecDeque, io, task};
+use std::io::ErrorKind::Other;
 
 use actix::prelude::*;
 use actix_rt::net::TcpStream;
@@ -130,7 +131,7 @@ impl Actor for RedisActor {
                                 let auth_response = StreamReader::from(&mut framed_stream)
                                     .await
                                     .map(String::from_resp)
-                                    .map_err(io::Error::other)
+                                    .map_err(|e| io::Error::new(Other, e))
                                     .map_err(ConnectError::Io)?;
 
                                 stream = framed_stream.into_inner();
@@ -152,7 +153,7 @@ impl Actor for RedisActor {
                                 let select_response = StreamReader::from(&mut framed_stream)
                                     .await
                                     .map(String::from_resp)
-                                    .map_err(io::Error::other)
+                                    .map_err(|e| io::Error::new(Other, e))
                                     .map_err(ConnectError::Io)?;
 
                                 stream = framed_stream.into_inner();
