@@ -86,3 +86,22 @@ fn parse_scheme_host_port_index_redis_address() {
     assert_eq!(password, None);
     assert_eq!(index, Some("5".to_string()));
 }
+
+#[test]
+fn parse_password_host_port_redis_address() {
+    let addr = "password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, None);
+
+    let addr = ":password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, None);
+}
