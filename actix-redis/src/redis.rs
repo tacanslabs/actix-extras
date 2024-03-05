@@ -8,7 +8,6 @@ use std::task::{Poll};
 use std::{collections::VecDeque, io, task};
 
 use actix::prelude::*;
-use actix_codec::Framed;
 use actix_rt::net::TcpStream;
 use actix_service::boxed::{self, BoxService};
 use actix_service::{Service, ServiceFactoryExt};
@@ -29,7 +28,7 @@ use tokio::{
     io::{split, WriteHalf},
     sync::oneshot,
 };
-use tokio_util::codec::{Encoder, FramedRead};
+use tokio_util::codec::{Encoder, Framed, FramedRead};
 
 use crate::Error;
 
@@ -117,7 +116,7 @@ impl Actor for RedisActor {
                                     .map_err(io::Error::other)
                                     .map_err(ConnectError::Io)?;
 
-                                stream = framed_stream.into_parts().io;
+                                stream = framed_stream.into_inner();
 
                                 info!("Auth response {auth_response:?}");
                             }
@@ -138,7 +137,7 @@ impl Actor for RedisActor {
                                     .map_err(io::Error::other)
                                     .map_err(ConnectError::Io)?;
 
-                                stream = framed_stream.into_parts().io;
+                                stream = framed_stream.into_inner();
 
                                 info!("Select response {select_response:?}");
                             }
