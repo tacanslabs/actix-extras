@@ -78,15 +78,9 @@ impl Actor for RedisActor {
                     // read side of the connection
                     ctx.add_stream(FramedRead::new(r, RespCodec));
 
-                    if let Some(password) = act.password.as_ref() {
-                        ctx.notify(Command(resp_array!["AUTH", password]));
-                    }
-
-                    if let Some(index) = act.index.as_ref() {
-                        ctx.notify(Command(resp_array!["SELECT", index]));
-                    }
-
                     act.backoff.reset();
+
+                    (act.password.clone(), act.index.clone())
                 }
                 Err(err) => {
                     error!("Can not connect to redis server: {}", err);
@@ -95,6 +89,16 @@ impl Actor for RedisActor {
                     if let Some(timeout) = act.backoff.next_backoff() {
                         ctx.run_later(timeout, |_, ctx| ctx.stop());
                     }
+                    (None, None)
+                }
+            })
+            .then(|(password, index), act, ctx| {
+                if let Some(password) = password {
+                    ctx.notify(Command(resp_array!["AUTH", password]));
+                }
+
+                if let Some(index) = index {
+                    ctx.notify(Command(resp_array!["SELECT", index]));
                 }
             })
             .wait(ctx);
