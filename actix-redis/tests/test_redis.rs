@@ -42,61 +42,140 @@ async fn test_redis() {
 }
 
 #[test]
-fn parse_redis_address_with_index() {
-    let address = "redis://127.0.0.1:6378/5";
+fn parse_host_port_redis_address() {
+    let addr = "127.0.0.1:6378";
 
-    let (host_port, password, index) = RedisActor::parse_url(address.to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
     assert_eq!(password, None);
-    assert_eq!(index, Some("5".to_string()));
+    assert_eq!(index, None);
+}
 
-    let (host_port, password, index) =
-        RedisActor::parse_url(address.trim_start_matches("redis://").to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
+#[test]
+fn parse_scheme_host_port_redis_address() {
+    let addr = "redis://127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, None);
+    assert_eq!(index, None);
+}
+
+#[test]
+fn parse_host_port_index_redis_address() {
+    let addr = "127.0.0.1:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
     assert_eq!(password, None);
     assert_eq!(index, Some("5".to_string()));
 }
 
 #[test]
-fn parse_redis_address_with_password() {
-    let address = "redis://:68831eec-e7dc-4ac3-9292-b5e2107bb46d@127.0.0.1:6378";
+fn parse_scheme_host_port_index_redis_address() {
+    let addr = "redis://127.0.0.1:6378/5";
 
-    let (host_port, password, index) = RedisActor::parse_url(address.to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
-    assert_eq!(
-        password,
-        Some("68831eec-e7dc-4ac3-9292-b5e2107bb46d".to_string())
-    );
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, None);
+    assert_eq!(index, Some("5".to_string()));
+}
+
+#[test]
+fn parse_password_host_port_redis_address() {
+    let addr = "password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
     assert_eq!(index, None);
 
-    let (host_port, password, index) =
-        RedisActor::parse_url(address.trim_start_matches("redis://").to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
-    assert_eq!(
-        password,
-        Some("68831eec-e7dc-4ac3-9292-b5e2107bb46d".to_string())
-    );
+    let addr = ":password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
     assert_eq!(index, None);
 }
 
 #[test]
-fn parse_redis_address_with_password_and_index() {
-    let address = "redis://:68831eec-e7dc-4ac3-9292-b5e2107bb46d@127.0.0.1:6378/5";
+fn parse_password_host_port_index_redis_address() {
+    let addr = "password123@127.0.0.1:6378/5";
 
-    let (host_port, password, index) = RedisActor::parse_url(address.to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
-    assert_eq!(
-        password,
-        Some("68831eec-e7dc-4ac3-9292-b5e2107bb46d".to_string())
-    );
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
     assert_eq!(index, Some("5".to_string()));
 
-    let (host_port, password, index) =
-        RedisActor::parse_url(address.trim_start_matches("redis://").to_string());
-    assert_eq!(host_port, "127.0.0.1:6378".to_string());
-    assert_eq!(
-        password,
-        Some("68831eec-e7dc-4ac3-9292-b5e2107bb46d".to_string())
-    );
+    let addr = ":password123@127.0.0.1:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, Some("5".to_string()));
+}
+
+#[test]
+fn parse_scheme_password_host_port_redis_address() {
+    let addr = "redis://password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, None);
+
+    let addr = "redis://:password123@127.0.0.1:6378";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, None);
+}
+
+#[test]
+fn parse_scheme_password_host_port_index_redis_address() {
+    let addr = "redis://password123@127.0.0.1:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, Some("5".to_string()));
+
+    let addr = "redis://:password123@127.0.0.1:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "127.0.0.1:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, Some("5".to_string()));
+}
+
+#[test]
+fn parse_scheme_password_localhost_port_index_redis_address() {
+    let addr = "redis://password123@localhost:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "localhost:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
+    assert_eq!(index, Some("5".to_string()));
+
+    let addr = "redis://:password123@localhost:6378/5";
+
+    let (addr, password, index) = RedisActor::parse_url(addr.into());
+
+    assert_eq!(addr, "localhost:6378".to_string());
+    assert_eq!(password, Some("password123".to_string()));
     assert_eq!(index, Some("5".to_string()));
 }
